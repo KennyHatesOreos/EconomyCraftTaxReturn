@@ -1,5 +1,14 @@
-> ⚠️ Development is paused until **August 2026**. No updates will be released during this time.  
-> Thanks to everyone for the support and suggestions so far. I’ll review new comments and issues once development resumes.
+## Tax Treasury Redistribution
+
+This patch changes EconomyCraft’s transaction tax behavior so collected tax is no longer discarded. Taxes from player shop purchases and order/market fulfillment are now deposited into a persistent server treasury.
+
+Every configured interval, the treasury is divided equally among eligible players and deposited into their economy balances. By default, redistribution happens every `168000` server ticks, equal to 7 Minecraft days, and only online players receive a payout.
+
+New Config Options
+
+  "taxRedistributionEnabled": true,
+  "taxRedistributionIntervalTicks": 168000,
+  "taxRedistributionOnlineOnly": true
 
 # EconomyCraft
 
