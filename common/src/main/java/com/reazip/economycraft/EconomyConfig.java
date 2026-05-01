@@ -23,6 +23,10 @@ public class EconomyConfig {
     public long dailyAmount;
     public long dailySellLimit;
     public double taxRate;
+    public boolean taxRedistributionEnabled = true;
+    public long taxRedistributionIntervalTicks = 168000L;
+    public boolean taxRedistributionOnlineOnly = false;
+    public long taxRedistributionMinimumAmount = 0L;
     @SerializedName("pvp_balance_loss_percentage")
     public double pvpBalanceLossPercentage;
     @SerializedName("standalone_commands")
