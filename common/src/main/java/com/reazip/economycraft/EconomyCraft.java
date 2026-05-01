@@ -4,6 +4,7 @@ import com.reazip.economycraft.util.ChatCompat;
 import dev.architectury.event.events.common.CommandRegistrationEvent;
 import dev.architectury.event.events.common.LifecycleEvent;
 import dev.architectury.event.events.common.PlayerEvent;
+import dev.architectury.event.events.common.TickEvent;
 import net.minecraft.ChatFormatting;
 import net.minecraft.network.chat.ClickEvent;
 import net.minecraft.network.chat.Component;
@@ -28,6 +29,8 @@ public final class EconomyCraft {
 
         LifecycleEvent.SERVER_STARTED.register(EconomyCraft::getManager);
 
+        TickEvent.SERVER_POST.register(server -> getManager(server).tickTaxRedistribution());
+
         LifecycleEvent.SERVER_STOPPING.register(server -> {
             if (manager != null && lastServer == server) {
                 manager.save();
@@ -40,6 +43,7 @@ public final class EconomyCraft {
     private static void onPlayerJoin(ServerPlayer player) {
         EconomyManager eco = getManager(player.level().getServer());
         eco.getBalance(player.getUUID(), true);
+        eco.notifyPendingTaxPayout(player);
 
         if (eco.getOrders().hasDeliveries(player.getUUID()) || eco.getShop().hasDeliveries(player.getUUID())) {
             ClickEvent ev = ChatCompat.runCommandEvent("/eco orders claim");
