@@ -2,7 +2,6 @@ package com.reazip.economycraft.util;
 
 import net.minecraft.commands.CommandSourceStack;
 import net.minecraft.server.level.ServerPlayer;
-import net.minecraft.server.players.NameAndId;
 
 import java.util.function.Predicate;
 
@@ -20,14 +19,9 @@ public final class PermissionCompat {
                 return true;
             }
 
-            NameAndId nameAndId = new NameAndId(
-                    player.getUUID(),
-                    player.getName().getString()
-            );
-
             return source.getServer()
                     .getPlayerList()
-                    .isOp(nameAndId);
+                    .isOp(player.getGameProfile());
         };
     }
 
