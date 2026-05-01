@@ -1,3 +1,5 @@
+All credit goes to the orginal Author PhilipB06 as this is their project and I wanted to add my own features to it for me and my friends.
+
 # EconomyCraft
 
 EconomyCraft provides a simple server-side cross-platform economy system for Fabric and NeoForge servers.
