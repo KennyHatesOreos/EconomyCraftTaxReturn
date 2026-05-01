@@ -91,9 +91,13 @@ public final class SellCommand {
             player.setItemInHand(net.minecraft.world.InteractionHand.MAIN_HAND, ItemStack.EMPTY);
         }
 
-        manager.addMoney(player.getUUID(), total);
+        long tax = calculateTax(total);
+        long payout = total - tax;
+        manager.addMoney(player.getUUID(), payout);
+        manager.collectTax(tax);
         Component msg = Component.literal("Successfully sold " + toSell + "x " + itemName +
-                        " for " + EconomyCraft.formatMoney(total) + ".")
+                        " for " + EconomyCraft.formatMoney(payout) +
+                        (tax > 0 ? " (" + EconomyCraft.formatMoney(tax) + " tax)." : "."))
                 .withStyle(ChatFormatting.GREEN);
         player.sendSystemMessage(msg);
         return toSell;
@@ -217,10 +221,14 @@ public final class SellCommand {
 
         String itemName = hand.getHoverName().getString();
         removeMatching(player, prices, pending.key(), pending.count());
-        manager.addMoney(player.getUUID(), pending.total());
+        long tax = calculateTax(pending.total());
+        long payout = pending.total() - tax;
+        manager.addMoney(player.getUUID(), payout);
+        manager.collectTax(tax);
 
         Component msg = Component.literal("Successfully sold " + pending.count() + "x " +
-                        itemName + " for " + EconomyCraft.formatMoney(pending.total()) + ".")
+                        itemName + " for " + EconomyCraft.formatMoney(payout) +
+                        (tax > 0 ? " (" + EconomyCraft.formatMoney(tax) + " tax)." : "."))
                 .withStyle(ChatFormatting.GREEN);
         player.sendSystemMessage(msg);
         PENDING.remove(player.getUUID());
@@ -289,6 +297,11 @@ public final class SellCommand {
         } catch (ArithmeticException ex) {
             return null;
         }
+    }
+
+    private static long calculateTax(long amount) {
+        long tax = Math.round(amount * EconomyConfig.get().taxRate);
+        return Math.max(0L, Math.min(amount, tax));
     }
 
     private static ServerPlayer getPlayer(CommandSourceStack source) {
