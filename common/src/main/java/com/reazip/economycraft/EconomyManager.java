@@ -28,10 +28,14 @@ public class EconomyManager {
     private final Path file;
     private final Path dailyFile;
     private final Path dailySellFile;
+    private final Path treasuryFile;
 
     private final Map<UUID, Long> balances = new HashMap<>();
     private final Map<UUID, Long> lastDaily = new HashMap<>();
     private final Map<UUID, DailySellData> dailySells = new HashMap<>();
+    private final Map<UUID, Long> pendingTaxPayouts = new HashMap<>();
+    private long taxTreasury;
+    private long taxRedistributionTicks;
     private Map<UUID, String> diskUserCache = null;
     private final PriceRegistry prices;
 
@@ -51,10 +55,12 @@ public class EconomyManager {
         this.file = dataDir.resolve("balances.json");
         this.dailyFile = dataDir.resolve("daily.json");
         this.dailySellFile = dataDir.resolve("daily_sells.json");
+        this.treasuryFile = dataDir.resolve("treasury.json");
 
         load();
         loadDaily();
         loadDailySells();
+        loadTreasury();
 
         this.shop = new com.reazip.economycraft.shop.ShopManager(server);
         this.orders = new com.reazip.economycraft.orders.OrderManager(server);
@@ -170,6 +176,128 @@ public class EconomyManager {
         return true;
     }
 
+    public void collectTax(long amount) {
+        if (amount <= 0L) return;
+        taxTreasury = amount > MAX - taxTreasury ? MAX : taxTreasury + amount;
+        saveTreasury();
+    }
+
+    public void setTaxTreasury(long amount) {
+        taxTreasury = clamp(amount);
+        saveTreasury();
+    }
+
+    public long getTaxTreasury() {
+        return taxTreasury;
+    }
+
+    public long getTaxRedistributionTicks() {
+        return taxRedistributionTicks;
+    }
+
+    public void notifyPendingTaxPayout(ServerPlayer player) {
+        long amount = pendingTaxPayouts.getOrDefault(player.getUUID(), 0L);
+        if (amount <= 0L) return;
+
+        pendingTaxPayouts.remove(player.getUUID());
+        player.sendSystemMessage(createTaxRedistributionMessage(amount));
+        saveTreasury();
+    }
+
+    public void tickTaxRedistribution() {
+        EconomyConfig config = EconomyConfig.get();
+        if (!config.taxRedistributionEnabled) return;
+
+        long interval = Math.max(1L, config.taxRedistributionIntervalTicks);
+        taxRedistributionTicks++;
+        if (taxRedistributionTicks < interval) return;
+
+        TreasuryPayout payout = redistributeTax(config.taxRedistributionOnlineOnly, true, false);
+        if (payout.paid()) {
+            taxRedistributionTicks = 0L;
+            save();
+        } else {
+            saveTreasury();
+        }
+    }
+
+    public TreasuryPayout forceTaxRedistribution() {
+        TreasuryPayout payout = redistributeTax(EconomyConfig.get().taxRedistributionOnlineOnly, true, true);
+        if (payout.paid()) {
+            taxRedistributionTicks = 0L;
+            save();
+        } else {
+            saveTreasury();
+        }
+        return payout;
+    }
+
+    private TreasuryPayout redistributeTax(boolean onlineOnly, boolean broadcast, boolean ignoreMinimum) {
+        if (taxTreasury <= 0L) {
+            taxRedistributionTicks = 0L;
+            return new TreasuryPayout(false, "Treasury is empty.", 0L, 0L, 0);
+        }
+
+        long minimum = Math.max(0L, EconomyConfig.get().taxRedistributionMinimumAmount);
+        if (!ignoreMinimum && minimum > 0L && taxTreasury < minimum) {
+            return new TreasuryPayout(false, "Treasury is below the minimum payout threshold.", taxTreasury, 0L, 0);
+        }
+
+        List<UUID> recipients = getTaxRedistributionRecipients(onlineOnly);
+        if (recipients.isEmpty()) {
+            return new TreasuryPayout(false, "No eligible players for redistribution.", taxTreasury, 0L, 0);
+        }
+
+        long share = taxTreasury / recipients.size();
+        if (share <= 0L) {
+            return new TreasuryPayout(false, "Treasury is too small to split among eligible players.", taxTreasury, 0L, recipients.size());
+        }
+
+        long payout = taxTreasury;
+        Set<UUID> recipientSet = new HashSet<>(recipients);
+        for (UUID recipient : recipients) {
+            balances.put(recipient, clamp(getBalance(recipient, true) + share));
+            pendingTaxPayouts.put(recipient, clamp(pendingTaxPayouts.getOrDefault(recipient, 0L) + share));
+        }
+
+        taxTreasury = 0L;
+        updateLeaderboard();
+
+        for (ServerPlayer player : server.getPlayerList().getPlayers()) {
+            if (recipientSet.contains(player.getUUID())) {
+                pendingTaxPayouts.remove(player.getUUID());
+                player.sendSystemMessage(createTaxRedistributionMessage(share));
+            }
+        }
+
+        if (broadcast) {
+            server.getPlayerList().broadcastSystemMessage(
+                    Component.literal("Tax treasury redistributed " + EconomyCraft.formatMoney(payout) +
+                                    " to " + recipients.size() + " player" + (recipients.size() == 1 ? "" : "s") +
+                                    ". Each received " + EconomyCraft.formatMoney(share) + ".")
+                            .withStyle(net.minecraft.ChatFormatting.GOLD),
+                    false
+            );
+        }
+
+        return new TreasuryPayout(true, "Redistributed treasury.", payout, share, recipients.size());
+    }
+
+    private List<UUID> getTaxRedistributionRecipients(boolean onlineOnly) {
+        if (onlineOnly) {
+            return server.getPlayerList().getPlayers().stream()
+                    .map(ServerPlayer::getUUID)
+                    .toList();
+        }
+
+        return new ArrayList<>(balances.keySet());
+    }
+
+    private Component createTaxRedistributionMessage(long amount) {
+        return Component.literal("Tax redistribution paid you " + EconomyCraft.formatMoney(amount) + ".")
+                .withStyle(net.minecraft.ChatFormatting.GREEN);
+    }
+
     // =====================================================================
     // === Load / Save =====================================================
     // =====================================================================
@@ -204,6 +332,8 @@ public class EconomyManager {
             String json = GSON.toJson(dailySells, DAILY_SELL_TYPE);
             Files.writeString(dailySellFile, json);
         } catch (IOException ignored) {}
+
+        saveTreasury();
     }
 
     private void loadDaily() {
@@ -224,6 +354,34 @@ public class EconomyManager {
                 if (map != null) dailySells.putAll(map);
             } catch (IOException ignored) {}
         }
+    }
+
+    private void loadTreasury() {
+        if (Files.exists(treasuryFile)) {
+            try {
+                String json = Files.readString(treasuryFile);
+                TreasuryData data = GSON.fromJson(json, TreasuryData.class);
+                if (data != null) {
+                    taxTreasury = clamp(data.amount);
+                    taxRedistributionTicks = Math.max(0L, data.ticksSinceLastRedistribution);
+                    if (data.pendingPayouts != null) {
+                        pendingTaxPayouts.clear();
+                        for (Map.Entry<UUID, Long> e : data.pendingPayouts.entrySet()) {
+                            if (e.getValue() != null && e.getValue() > 0L) {
+                                pendingTaxPayouts.put(e.getKey(), e.getValue());
+                            }
+                        }
+                    }
+                }
+            } catch (IOException ignored) {}
+        }
+    }
+
+    private void saveTreasury() {
+        try {
+            String json = GSON.toJson(new TreasuryData(taxTreasury, taxRedistributionTicks, pendingTaxPayouts));
+            Files.writeString(treasuryFile, json);
+        } catch (IOException ignored) {}
     }
 
     // =====================================================================
@@ -434,4 +592,18 @@ public class EconomyManager {
     }
 
     private record DailySellData(long day, long amount) {}
+
+    public record TreasuryPayout(boolean paid, String message, long total, long share, int recipients) {}
+
+    private static final class TreasuryData {
+        long amount;
+        long ticksSinceLastRedistribution;
+        Map<UUID, Long> pendingPayouts;
+
+        TreasuryData(long amount, long ticksSinceLastRedistribution, Map<UUID, Long> pendingPayouts) {
+            this.amount = amount;
+            this.ticksSinceLastRedistribution = ticksSinceLastRedistribution;
+            this.pendingPayouts = new HashMap<>(pendingPayouts);
+        }
+    }
 }
